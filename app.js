@@ -1,0 +1,722 @@
+// ========================================
+// ケアプラン作成支援アプリ - メインアプリケーション
+// ========================================
+
+// グローバル状態
+let currentScreen = 'homeScreen';
+let selectedServiceType = null;
+let currentCategoryIndex = 0;
+let assessmentData = {};
+let basicInfoData = {};
+let carePlanItems = [];
+let useLocalAI = false;
+let aiSession = null;
+let apiKey = localStorage.getItem('geminiApiKey') || '';
+
+// ========================================
+// 初期化
+// ========================================
+document.addEventListener('DOMContentLoaded', async () => {
+    await checkLocalAI();
+    showScreen('homeScreen');
+});
+
+// ========================================
+// ローカルAIチェック
+// ========================================
+async function checkLocalAI() {
+    try {
+        if ('ai' in window && 'languageModel' in window.ai) {
+            const capabilities = await window.ai.languageModel.capabilities();
+
+            if (capabilities.available === 'readily') {
+                aiSession = await window.ai.languageModel.create();
+                useLocalAI = true;
+                updatePrivacyBadge(true);
+                updateAIStatusBadge(true);
+                console.log('ローカルAI利用可能');
+            } else if (capabilities.available === 'after-download') {
+                updatePrivacyBadge(false, 'AIモデルをダウンロード中...');
+                aiSession = await window.ai.languageModel.create();
+                useLocalAI = true;
+                updatePrivacyBadge(true);
+                updateAIStatusBadge(true);
+            } else {
+                throw new Error('ローカルAI非対応');
+            }
+        } else {
+            throw new Error('Prompt API未対応');
+        }
+    } catch (error) {
+        console.log('ローカルAI利用不可:', error);
+        useLocalAI = false;
+        updatePrivacyBadge(false);
+        updateAIStatusBadge(false);
+        showFallbackNotice();
+    }
+}
+
+function updateAIStatusBadge(isLocal) {
+    const badge = document.getElementById('aiStatusBadge');
+    if (!badge) return;
+
+    if (isLocal) {
+        badge.innerHTML = `
+            <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 12px 20px; border-radius: 12px; text-align: center;">
+                <div style="font-size: 24px; margin-bottom: 4px;">✅</div>
+                <div style="font-weight: 600;">ローカルAI利用可能</div>
+                <div style="font-size: 12px; opacity: 0.9;">完全オフラインで動作します</div>
+            </div>
+        `;
+    } else {
+        badge.innerHTML = `
+            <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 12px 20px; border-radius: 12px; text-align: center;">
+                <div style="font-size: 24px; margin-bottom: 4px;">⚠️</div>
+                <div style="font-weight: 600;">ローカルAI利用不可</div>
+                <div style="font-size: 12px; opacity: 0.9;">${apiKey ? 'APIキー設定済み' : '手動入力または設定からAPIキーを入力'}</div>
+            </div>
+        `;
+    }
+}
+
+function showFallbackNotice() {
+    const notice = document.getElementById('fallbackNotice');
+    if (notice) {
+        notice.classList.remove('hidden');
+    }
+}
+
+function updatePrivacyBadge(isLocal, customMessage = null) {
+    const badge = document.getElementById('privacyBadge');
+    if (!badge) return;
+
+    if (customMessage) {
+        badge.innerHTML = `⏳ ${customMessage}`;
+        badge.className = 'privacy-badge processing';
+    } else if (isLocal) {
+        badge.innerHTML = '🔒 端末内処理のみ - データは外部送信されません';
+        badge.className = 'privacy-badge';
+    } else {
+        badge.innerHTML = '🔐 データはあなたの端末に保存されます';
+        badge.className = 'privacy-badge';
+    }
+}
+
+// ========================================
+// 画面遷移
+// ========================================
+function showScreen(screenId) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const screen = document.getElementById(screenId);
+    if (screen) {
+        screen.classList.add('active');
+        currentScreen = screenId;
+    }
+
+    // 画面ごとの初期化
+    if (screenId === 'assessmentScreen') {
+        renderCategoryTabs();
+        renderCategoryContent();
+    } else if (screenId === 'carePlanScreen') {
+        renderCarePlan();
+    }
+}
+
+// ========================================
+// サービス種別選択
+// ========================================
+function selectServiceType(type) {
+    selectedServiceType = type;
+
+    // UI更新
+    document.querySelectorAll('.service-type-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+    document.querySelector(`[data-type="${type}"]`)?.classList.add('selected');
+
+    // 次へボタン有効化
+    const nextBtn = document.getElementById('startAssessmentBtn');
+    if (nextBtn) nextBtn.disabled = false;
+}
+
+function startAssessment() {
+    if (!selectedServiceType) {
+        alert('サービス種別を選択してください');
+        return;
+    }
+    showScreen('assessmentScreen');
+}
+
+// ========================================
+// カテゴリタブ
+// ========================================
+function renderCategoryTabs() {
+    const container = document.getElementById('categoryTabs');
+    if (!container) return;
+
+    const html = ASSESSMENT_CATEGORIES.map((cat, index) => {
+        const isActive = index === currentCategoryIndex;
+        const data = assessmentData[cat.id] || { checkedItems: [] };
+        const hasData = data.checkedItems.length > 0;
+
+        return `
+            <button class="category-tab ${isActive ? 'active' : ''}" 
+                    onclick="switchCategory(${index})">
+                <span>${cat.icon}</span>
+                <span>${cat.name}</span>
+                ${hasData ? `<span class="badge">${data.checkedItems.length}</span>` : ''}
+            </button>
+        `;
+    }).join('');
+
+    container.innerHTML = html;
+}
+
+function switchCategory(index) {
+    saveCurrentCategoryData();
+    currentCategoryIndex = index;
+    renderCategoryTabs();
+    renderCategoryContent();
+}
+
+// ========================================
+// カテゴリコンテンツ
+// ========================================
+function renderCategoryContent() {
+    const container = document.getElementById('categoryContent');
+    if (!container) return;
+
+    const category = ASSESSMENT_CATEGORIES[currentCategoryIndex];
+    const savedData = assessmentData[category.id] || { checkedItems: [], detailText: '' };
+
+    const html = `
+        <div class="card">
+            <h3 class="card-title">
+                <span class="icon">${category.icon}</span>
+                ${category.name}
+            </h3>
+            
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">
+                該当する項目にチェックを入れてください
+            </p>
+            
+            <div class="checkbox-list">
+                ${category.checkItems.map((item, index) => `
+                    <div class="checkbox-item">
+                        <input type="checkbox" 
+                               id="check-${index}" 
+                               ${savedData.checkedItems.includes(item) ? 'checked' : ''}
+                               onchange="onCheckChange()">
+                        <label for="check-${index}">${item}</label>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3 class="card-title">具体的内容・対応するケア項目</h3>
+            <textarea class="form-textarea" 
+                      id="detailText" 
+                      placeholder="チェックした項目について、詳細を記入してください"
+                      onblur="saveCurrentCategoryData()">${savedData.detailText || ''}</textarea>
+        </div>
+        
+        <div class="card">
+            <button class="generate-btn ${useLocalAI ? 'local-ai' : ''}" 
+                    onclick="generateFromCategory()" 
+                    id="generateCategoryBtn"
+                    ${!useLocalAI && !apiKey ? 'disabled' : ''}>
+                ${useLocalAI ? '🔒 この項目を生成（端末内処理）' : '✨ この項目を生成'}
+            </button>
+            
+            <button class="generate-btn mt-4" 
+                    onclick="generateFromAllCategories()" 
+                    id="generateAllBtn"
+                    ${!useLocalAI && !apiKey ? 'disabled' : ''}>
+                🌟 すべてから統合生成 
+                <span id="checkedCount">(${getCheckedCategoryCount()}項目)</span>
+            </button>
+            
+            <button class="btn btn-secondary btn-block mt-4" 
+                    onclick="openManualEntryModal()">
+                ✏️ 手動で入力する
+            </button>
+            
+            ${!useLocalAI && !apiKey ? `
+                <p style="color: var(--warning-color); font-size: 13px; margin-top: 12px; text-align: center;">
+                    ⚠️ AI機能を使うには<a href="#" onclick="openSettings(); return false;">設定</a>からAPIキーを入力してください
+                </p>
+            ` : ''}
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+function onCheckChange() {
+    saveCurrentCategoryData();
+    renderCategoryTabs();
+    document.getElementById('checkedCount').textContent = `(${getCheckedCategoryCount()}項目)`;
+}
+
+function saveCurrentCategoryData() {
+    const category = ASSESSMENT_CATEGORIES[currentCategoryIndex];
+    const checkedItems = [];
+
+    category.checkItems.forEach((item, index) => {
+        const checkbox = document.getElementById(`check-${index}`);
+        if (checkbox && checkbox.checked) {
+            checkedItems.push(item);
+        }
+    });
+
+    const detailText = document.getElementById('detailText')?.value || '';
+
+    assessmentData[category.id] = {
+        checkedItems,
+        detailText
+    };
+}
+
+function getCheckedCategoryCount() {
+    let count = 0;
+    ASSESSMENT_CATEGORIES.forEach(cat => {
+        const data = assessmentData[cat.id];
+        if (data && data.checkedItems && data.checkedItems.length > 0) {
+            count++;
+        }
+    });
+    return count;
+}
+
+// ========================================
+// AI生成
+// ========================================
+async function generateFromCategory() {
+    saveCurrentCategoryData();
+
+    const category = ASSESSMENT_CATEGORIES[currentCategoryIndex];
+    const data = assessmentData[category.id];
+
+    if (!data || data.checkedItems.length === 0) {
+        alert('少なくとも1つの項目にチェックを入れてください');
+        return;
+    }
+
+    showLoading(true);
+
+    try {
+        const result = await callAI(buildCategoryPrompt(category, data));
+
+        carePlanItems.push({
+            categoryName: category.name,
+            ...result
+        });
+
+        showScreen('carePlanScreen');
+    } catch (error) {
+        alert('生成に失敗しました: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function generateFromAllCategories() {
+    saveCurrentCategoryData();
+
+    const checkedCategories = [];
+    ASSESSMENT_CATEGORIES.forEach(cat => {
+        const data = assessmentData[cat.id];
+        if (data && data.checkedItems && data.checkedItems.length > 0) {
+            checkedCategories.push({
+                ...cat,
+                data
+            });
+        }
+    });
+
+    if (checkedCategories.length === 0) {
+        alert('少なくとも1つのカテゴリでチェックを入れてください');
+        return;
+    }
+
+    showLoading(true);
+
+    try {
+        const results = await callAI(buildIntegratedPrompt(checkedCategories));
+
+        if (Array.isArray(results)) {
+            results.forEach(item => carePlanItems.push(item));
+        }
+
+        showScreen('carePlanScreen');
+    } catch (error) {
+        alert('統合生成に失敗しました: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ========================================
+// AI呼び出し
+// ========================================
+async function callAI(prompt) {
+    console.log('プロンプト:', prompt);
+
+    let responseText;
+
+    if (useLocalAI && aiSession) {
+        // ローカルAI
+        updatePrivacyBadge(true, '端末内でAI処理中...');
+        responseText = await aiSession.prompt(prompt);
+        updatePrivacyBadge(true);
+    } else if (apiKey) {
+        // API（フォールバック）
+        responseText = await callGeminiAPI(prompt);
+    } else {
+        throw new Error('AIが利用できません。設定からAPIキーを入力してください。');
+    }
+
+    console.log('AIレスポンス:', responseText);
+    return parseAIResponse(responseText);
+}
+
+async function callGeminiAPI(prompt) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 4096
+            }
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error('API呼び出しに失敗しました');
+    }
+
+    const result = await response.json();
+    return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+function parseAIResponse(text) {
+    try {
+        const cleanedText = text
+            .replace(/```json\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .trim();
+
+        // 配列を探す
+        const arrayMatch = cleanedText.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+            return JSON.parse(arrayMatch[0]);
+        }
+
+        // オブジェクトを探す
+        const objectMatch = cleanedText.match(/\{[\s\S]*\}/);
+        if (objectMatch) {
+            return JSON.parse(objectMatch[0]);
+        }
+
+        throw new Error('JSONが見つかりません');
+    } catch (error) {
+        console.error('パースエラー:', error);
+        return {
+            needs: '課題の把握が必要である',
+            longTermGoal: '適切なケアを受けて安心して生活できる',
+            shortTermGoal: '日常生活の課題を改善できる',
+            serviceContent: '個別のケアプランに基づくサービス提供'
+        };
+    }
+}
+
+// ========================================
+// プロンプト構築
+// ========================================
+function buildCategoryPrompt(category, data) {
+    const serviceTypeName = SERVICE_TYPES[selectedServiceType]?.planName || 'サービス計画書（第2表）';
+
+    return `あなたは介護支援専門員（ケアマネジャー）です。以下の情報から${serviceTypeName}を作成してください。
+
+【カテゴリ】${category.name}
+【課題項目】${data.checkedItems.join('、')}
+${data.detailText ? `【具体的内容】${data.detailText}` : ''}
+
+【記述ルール】
+- ニーズは「〜〜だが、〜〜したい」という形式で1文にまとめる
+- 長期目標は55文字以内で「〜〜できる」で終わる
+- 短期目標は55文字以内で「〜〜できる」で終わる
+
+以下のJSON形式で出力してください：
+{
+  "needs": "ニーズ（〜〜だが、〜〜したい）",
+  "longTermGoal": "長期目標（55文字以内、〜〜できる）",
+  "shortTermGoal": "短期目標（55文字以内、〜〜できる）",
+  "serviceContent": "サービス内容"
+}`;
+}
+
+function buildIntegratedPrompt(categories) {
+    const serviceTypeName = SERVICE_TYPES[selectedServiceType]?.planName || 'サービス計画書（第2表）';
+
+    const categoryInfo = categories.map((cat, index) => {
+        return `【カテゴリ${index + 1}: ${cat.name}】
+・課題項目: ${cat.data.checkedItems.join('、')}
+${cat.data.detailText ? `・具体的内容: ${cat.data.detailText}` : ''}`;
+    }).join('\n\n');
+
+    return `あなたは介護支援専門員（ケアマネジャー）です。以下の複数カテゴリの情報を統合的に分析し、${serviceTypeName}を作成してください。
+
+【アセスメント情報】
+${categoryInfo}
+
+【作成のポイント】
+1. すべてのカテゴリの情報を統合的に分析
+2. 関連性のある課題は、共通のニーズ・長期目標でまとめる
+3. ニーズと長期目標の組み合わせは自由に判断
+
+【記述ルール】
+- ニーズは「〜〜だが、〜〜したい」という形式で1文にまとめる
+- 長期目標は55文字以内で「〜〜できる」で終わる
+- 短期目標は55文字以内で「〜〜できる」で終わる
+
+以下のJSON配列形式で${categories.length}件を出力：
+[
+  {
+    "categoryName": "カテゴリ名",
+    "needs": "ニーズ（〜〜だが、〜〜したい）",
+    "longTermGoal": "長期目標（55文字以内、〜〜できる）",
+    "shortTermGoal": "短期目標（55文字以内、〜〜できる）",
+    "serviceContent": "サービス内容"
+  }
+]`;
+}
+
+// ========================================
+// 計画書表示
+// ========================================
+function renderCarePlan() {
+    const container = document.getElementById('carePlanContent');
+    if (!container) return;
+
+    if (carePlanItems.length === 0) {
+        container.innerHTML = '<p class="text-center py-4">生成された計画書がありません</p>';
+        return;
+    }
+
+    const html = `
+        <div class="card" style="overflow-x: auto;">
+            <table class="careplan-table">
+                <thead>
+                    <tr>
+                        <th style="width: 80px;">カテゴリ</th>
+                        <th>ニーズ</th>
+                        <th>長期目標</th>
+                        <th>短期目標</th>
+                        <th>サービス内容</th>
+                        <th style="width: 50px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${carePlanItems.map((item, index) => `
+                        <tr>
+                            <td>${item.categoryName || ''}</td>
+                            <td>${item.needs || ''}</td>
+                            <td>${item.longTermGoal || ''}</td>
+                            <td>${item.shortTermGoal || ''}</td>
+                            <td>${item.serviceContent || ''}</td>
+                            <td>
+                                <button onclick="deleteCarePlanItem(${index})" 
+                                        style="background: none; border: none; cursor: pointer;">
+                                    🗑️
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card">
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-secondary" onclick="copyToClipboard()">📋 コピー</button>
+                <button class="btn btn-secondary" onclick="exportToCSV()">📄 CSV出力</button>
+                <button class="btn btn-primary" onclick="showScreen('assessmentScreen')">➕ 追加</button>
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+function deleteCarePlanItem(index) {
+    if (confirm('この項目を削除しますか？')) {
+        carePlanItems.splice(index, 1);
+        renderCarePlan();
+    }
+}
+
+// ========================================
+// エクスポート
+// ========================================
+function copyToClipboard() {
+    if (carePlanItems.length === 0) return;
+
+    let text = `【${SERVICE_TYPES[selectedServiceType]?.planName || 'サービス計画書'}】\n\n`;
+
+    carePlanItems.forEach((item, index) => {
+        text += `■ ${index + 1}. ${item.categoryName}\n`;
+        text += `【ニーズ】${item.needs}\n`;
+        text += `【長期目標】${item.longTermGoal}\n`;
+        text += `【短期目標】${item.shortTermGoal}\n`;
+        text += `【サービス内容】${item.serviceContent}\n\n`;
+    });
+
+    navigator.clipboard.writeText(text).then(() => {
+        alert('クリップボードにコピーしました');
+    });
+}
+
+function exportToCSV() {
+    if (carePlanItems.length === 0) return;
+
+    const BOM = '\uFEFF';
+    let csv = 'No.,カテゴリ,ニーズ,長期目標,短期目標,サービス内容\n';
+
+    carePlanItems.forEach((item, index) => {
+        const row = [
+            index + 1,
+            escapeCSV(item.categoryName),
+            escapeCSV(item.needs),
+            escapeCSV(item.longTermGoal),
+            escapeCSV(item.shortTermGoal),
+            escapeCSV(item.serviceContent)
+        ];
+        csv += row.join(',') + '\n';
+    });
+
+    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ケアプラン_${new Date().toLocaleDateString('ja-JP').replace(/\//g, '-')}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function escapeCSV(str) {
+    if (!str) return '';
+    if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+}
+
+// ========================================
+// ローディング
+// ========================================
+function showLoading(show) {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.classList.toggle('hidden', !show);
+    }
+
+    if (show && useLocalAI) {
+        updatePrivacyBadge(true, '端末内でAI処理中... インターネット接続は使用していません');
+    }
+}
+
+// ========================================
+// 設定
+// ========================================
+function openSettings() {
+    showScreen('settingsScreen');
+    document.getElementById('apiKeyInput').value = apiKey;
+}
+
+function saveSettings() {
+    apiKey = document.getElementById('apiKeyInput').value.trim();
+    localStorage.setItem('geminiApiKey', apiKey);
+    alert('設定を保存しました');
+    showScreen('homeScreen');
+}
+
+// ========================================
+// 手動入力モーダル
+// ========================================
+function openManualEntryModal() {
+    saveCurrentCategoryData();
+
+    const category = ASSESSMENT_CATEGORIES[currentCategoryIndex];
+
+    const modal = document.createElement('div');
+    modal.id = 'manualEntryModal';
+    modal.className = 'loading-overlay';
+    modal.innerHTML = `
+        <div class="loading-content" style="max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto; text-align: left;">
+            <h3 style="margin-bottom: 16px;">${category.name} - 手動入力</h3>
+            
+            <div class="form-group">
+                <label class="form-label">ニーズ（生活全般の解決すべき課題）</label>
+                <textarea class="form-textarea" id="manualNeeds" placeholder="〜〜だが、〜〜したい" style="min-height: 60px;"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">長期目標（55文字以内）</label>
+                <input type="text" class="form-input" id="manualLongTerm" placeholder="〜〜できる" maxlength="55">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">短期目標（55文字以内）</label>
+                <input type="text" class="form-input" id="manualShortTerm" placeholder="〜〜できる" maxlength="55">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">サービス内容</label>
+                <textarea class="form-textarea" id="manualService" placeholder="サービス内容を入力" style="min-height: 60px;"></textarea>
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-top: 20px;">
+                <button class="btn btn-secondary" style="flex: 1;" onclick="closeManualEntryModal()">キャンセル</button>
+                <button class="btn btn-primary" style="flex: 1;" onclick="saveManualEntry('${category.name}')">保存</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+}
+
+function closeManualEntryModal() {
+    const modal = document.getElementById('manualEntryModal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+function saveManualEntry(categoryName) {
+    const needs = document.getElementById('manualNeeds').value.trim();
+    const longTermGoal = document.getElementById('manualLongTerm').value.trim();
+    const shortTermGoal = document.getElementById('manualShortTerm').value.trim();
+    const serviceContent = document.getElementById('manualService').value.trim();
+
+    if (!needs || !longTermGoal || !shortTermGoal) {
+        alert('ニーズ・長期目標・短期目標は必須です');
+        return;
+    }
+
+    carePlanItems.push({
+        categoryName,
+        needs,
+        longTermGoal,
+        shortTermGoal,
+        serviceContent
+    });
+
+    closeManualEntryModal();
+    showScreen('carePlanScreen');
+}

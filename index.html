@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#10b981">
+    <meta name="description" content="ケアプラン作成支援アプリ - 厚生労働省課題分析標準項目（23項目）準拠">
+    <title>ケアプラン作成支援</title>
+    <link rel="stylesheet" href="style.css">
+
+    <!-- PWA対応 -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+</head>
+
+<body>
+    <!-- プライバシーバッジ（常時表示） -->
+    <div id="privacyBadge" class="privacy-badge">
+        🔒 端末内処理のみ - データは外部送信されません
+    </div>
+
+    <div class="app-container">
+        <!-- ホーム画面 -->
+        <div id="homeScreen" class="screen active">
+            <div class="card text-center">
+                <h1 style="font-size: 28px; margin-bottom: 8px;">ケアプラン作成支援</h1>
+                <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                    厚生労働省 課題分析標準項目（23項目）準拠
+                </p>
+
+                <div id="aiStatusBadge" style="margin-bottom: 24px;">
+                    <!-- ローカルAIの状態が表示される -->
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">サービス種別を選択</h2>
+
+                <div class="service-type-grid">
+                    <div class="service-type-card" data-type="facility" onclick="selectServiceType('facility')">
+                        <div class="service-type-icon">🏥</div>
+                        <div class="service-type-name">施設サービス</div>
+                    </div>
+                    <div class="service-type-card" data-type="home" onclick="selectServiceType('home')">
+                        <div class="service-type-icon">🏠</div>
+                        <div class="service-type-name">居宅サービス</div>
+                    </div>
+                </div>
+
+                <button id="startAssessmentBtn" class="btn btn-primary btn-block" onclick="startAssessment()" disabled>
+                    アセスメントを開始
+                </button>
+            </div>
+
+            <div class="card">
+                <button class="btn btn-secondary btn-block" onclick="openSettings()">
+                    ⚙️ 設定
+                </button>
+            </div>
+
+            <!-- フォールバック案内（ローカルAI非対応時） -->
+            <div id="fallbackNotice" class="fallback-notice hidden">
+                <h4>⚠️ ローカルAIが利用できない環境です</h4>
+                <p>
+                    お使いのブラウザではChrome組み込みAIが利用できません。
+                    AIを使用するには、設定画面からAPIキーを入力してください。
+                    APIキーなしでも手動入力でご利用いただけます。
+                </p>
+            </div>
+        </div>
+
+        <!-- アセスメント画面 -->
+        <div id="assessmentScreen" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="showScreen('homeScreen')">←</button>
+                <h1 class="screen-title">アセスメント入力</h1>
+            </div>
+
+            <div id="categoryTabs" class="category-tabs">
+                <!-- カテゴリタブがここに生成される -->
+            </div>
+
+            <div id="categoryContent">
+                <!-- カテゴリコンテンツがここに生成される -->
+            </div>
+        </div>
+
+        <!-- 計画書画面 -->
+        <div id="carePlanScreen" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="showScreen('assessmentScreen')">←</button>
+                <h1 class="screen-title">サービス計画書（第2表）</h1>
+            </div>
+
+            <div id="carePlanContent">
+                <!-- 計画書がここに生成される -->
+            </div>
+        </div>
+
+        <!-- 設定画面 -->
+        <div id="settingsScreen" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="showScreen('homeScreen')">←</button>
+                <h1 class="screen-title">設定</h1>
+            </div>
+
+            <div class="card">
+                <h3 class="card-title">🔐 AIキー設定（任意）</h3>
+                <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px;">
+                    ローカルAIが利用できない場合のみ必要です。
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>
+                    で取得できます。
+                </p>
+
+                <div class="form-group">
+                    <label class="form-label">Gemini API キー</label>
+                    <input type="password" id="apiKeyInput" class="form-input" placeholder="APIキーを入力">
+                </div>
+
+                <button class="btn btn-primary btn-block" onclick="saveSettings()">
+                    保存
+                </button>
+            </div>
+
+            <div class="card">
+                <h3 class="card-title">🔒 プライバシーについて</h3>
+                <ul style="font-size: 14px; color: var(--text-secondary); padding-left: 20px;">
+                    <li>入力データはすべてお使いの端末に保存されます</li>
+                    <li>ローカルAI使用時は、データは一切外部に送信されません</li>
+                    <li>APIキー使用時も、データは端末とGoogle AI間のみで通信されます</li>
+                    <li>当アプリのサーバーにデータが送信されることはありません</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ローディングオーバーレイ -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">AI生成中...</div>
+            <div class="loading-subtext" id="loadingSubtext">
+                端末内で処理しています
+            </div>
+        </div>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
