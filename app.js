@@ -1223,46 +1223,135 @@ function loadCarePlan(planId) {
 }
 
 function deleteCarePlan(planId) {
-    if (!confirm('この計画書を削除しますか？')) {
-        return;
+    // iOS対応: カスタム確認モーダルを表示
+    showDeleteConfirmModal(planId, 'plan');
+}
+
+function showDeleteConfirmModal(targetId, type) {
+    const modal = document.createElement('div');
+    modal.id = 'deleteConfirmModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 1100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    `;
+
+    const title = type === 'plan' ? '計画書を削除' : '利用者を削除';
+    const message = type === 'plan'
+        ? 'この計画書を削除しますか？'
+        : 'この利用者を削除しますか？関連する計画書も削除されます。';
+
+    modal.innerHTML = `
+        <div style="
+            background: var(--bg-color);
+            border-radius: 16px;
+            max-width: 350px;
+            width: 100%;
+            padding: 24px;
+        ">
+            <h2 style="margin-bottom: 12px; color: var(--text-color);">🗑️ ${title}</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">
+                ${message}
+            </p>
+            
+            <div style="display: flex; gap: 12px;">
+                <button class="btn btn-secondary" style="flex: 1;" onclick="closeDeleteConfirmModal()">
+                    キャンセル
+                </button>
+                <button class="btn btn-danger" style="flex: 1;" onclick="closeDeleteConfirmModal(); doDelete('${targetId}', '${type}')">
+                    削除する
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeDeleteConfirmModal();
+        }
+    });
+}
+
+function closeDeleteConfirmModal() {
+    const modal = document.getElementById('deleteConfirmModal');
+    if (modal) modal.remove();
+}
+
+function doDelete(targetId, type) {
+    if (type === 'plan') {
+        savedCarePlans = savedCarePlans.filter(p => p.id !== targetId);
+        localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+
+        if (currentPlanId === targetId) {
+            currentPlanId = null;
+        }
+
+        // モーダルを再描画
+        closePlanSelectModal();
+
+        // 計画書が残っている場合はモーダルを再表示
+        const user = users.find(u => u.id === currentUserId);
+        const userPlans = savedCarePlans.filter(p => p.userId === currentUserId);
+        if (user && userPlans.length > 0) {
+            showUserPlanSelectModal(user, userPlans);
+        }
+
+        showToast('計画書を削除しました');
+    } else if (type === 'user') {
+        users = users.filter(u => u.id !== targetId);
+        savedCarePlans = savedCarePlans.filter(p => p.userId !== targetId);
+
+        localStorage.setItem('careplan_users', JSON.stringify(users));
+        localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+
+        if (currentUserId === targetId) {
+            currentUserId = null;
+        }
+
+        renderUserList();
+        showToast('利用者を削除しました');
     }
+}
 
-    savedCarePlans = savedCarePlans.filter(p => p.id !== planId);
-    localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+// トースト通知（alertの代わり）
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--text-color);
+        color: var(--bg-color);
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 2000;
+        animation: fadeIn 0.3s ease;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
 
-    if (currentPlanId === planId) {
-        currentPlanId = null;
-    }
-
-    // モーダルを再描画
-    closePlanSelectModal();
-
-    // 計画書が残っている場合はモーダルを再表示
-    const user = users.find(u => u.id === currentUserId);
-    const userPlans = savedCarePlans.filter(p => p.userId === currentUserId);
-    if (user && userPlans.length > 0) {
-        showUserPlanSelectModal(user, userPlans);
-    }
-
-    alert('計画書を削除しました');
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 2000);
 }
 
 function deleteUser(userId) {
-    if (!confirm('この利用者を削除しますか？関連する計画書も削除されます。')) {
-        return;
-    }
-
-    users = users.filter(u => u.id !== userId);
-    savedCarePlans = savedCarePlans.filter(p => p.userId !== userId);
-
-    localStorage.setItem('careplan_users', JSON.stringify(users));
-    localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
-
-    if (currentUserId === userId) {
-        currentUserId = null;
-    }
-
-    renderUserList();
+    // iOS対応: カスタム確認モーダルを表示
+    showDeleteConfirmModal(userId, 'user');
 }
 
 // ========================================
