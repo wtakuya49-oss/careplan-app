@@ -382,20 +382,25 @@ async function callAI(prompt) {
 }
 
 async function callGeminiAPI(prompt) {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+    // 利用可能なモデル（2026年現在）
+    const modelName = 'gemini-2.0-flash';
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
                 temperature: 0.7,
-                maxOutputTokens: 4096
+                maxOutputTokens: 2048
             }
         })
     });
 
     if (!response.ok) {
-        throw new Error('API呼び出しに失敗しました');
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData?.error?.message || `HTTPエラー ${response.status}`;
+        throw new Error(`API呼び出しに失敗: ${errorMessage}`);
     }
 
     const result = await response.json();
@@ -459,40 +464,47 @@ ${data.detailText ? `【具体的内容】${data.detailText}` : ''}
 }`;
 }
 
+// プロンプト圧縮: 特記事項がある項目のみ抽出
+function compressAssessmentData(categories) {
+    return categories
+        .filter(cat => cat.data.checkedItems.length > 0 || cat.data.detailText)
+        .map(cat => ({
+            category: cat.name,
+            issues: cat.data.checkedItems,
+            detail: cat.data.detailText
+        }));
+}
+
 function buildIntegratedPrompt(categories) {
     const serviceTypeName = SERVICE_TYPES[selectedServiceType]?.planName || 'サービス計画書（第2表）';
 
-    const categoryInfo = categories.map((cat, index) => {
-        return `【カテゴリ${index + 1}: ${cat.name}】
-・課題項目: ${cat.data.checkedItems.join('、')}
-${cat.data.detailText ? `・具体的内容: ${cat.data.detailText}` : ''}`;
-    }).join('\n\n');
+    // 圧縮されたカテゴリ情報（トークン削減）
+    const compressed = compressAssessmentData(categories);
+    const categoryInfo = compressed.map((item, i) => {
+        let info = `${i + 1}. ${item.category}`;
+        if (item.issues.length > 0) {
+            info += `\n   課題: ${item.issues.join('、')}`;
+        }
+        if (item.detail) {
+            info += `\n   詳細: ${item.detail}`;
+        }
+        return info;
+    }).join('\n');
 
-    return `あなたは介護支援専門員（ケアマネジャー）です。以下の複数カテゴリの情報を統合的に分析し、${serviceTypeName}を作成してください。
+    // ローカルAI向けに最適化されたプロンプト（短く簡潔に）
+    const outputCount = Math.min(compressed.length, 5);
 
-【アセスメント情報】
+    return `【${serviceTypeName}生成】
+
 ${categoryInfo}
 
-【作成のポイント】
-1. すべてのカテゴリの情報を統合的に分析
-2. 関連性のある課題は、共通のニーズ・長期目標でまとめる
-3. ニーズと長期目標の組み合わせは自由に判断
+【ルール】
+- ニーズ: 「〜だが、〜したい」形式
+- 長期目標: 55文字以内「〜できる」
+- 短期目標: 55文字以内「〜できる」
 
-【記述ルール】
-- ニーズは「〜〜だが、〜〜したい」という形式で1文にまとめる
-- 長期目標は55文字以内で「〜〜できる」で終わる
-- 短期目標は55文字以内で「〜〜できる」で終わる
-
-以下のJSON配列形式で${categories.length}件を出力：
-[
-  {
-    "categoryName": "カテゴリ名",
-    "needs": "ニーズ（〜〜だが、〜〜したい）",
-    "longTermGoal": "長期目標（55文字以内、〜〜できる）",
-    "shortTermGoal": "短期目標（55文字以内、〜〜できる）",
-    "serviceContent": "サービス内容"
-  }
-]`;
+【出力】JSON配列で${outputCount}件:
+[{"categoryName":"名前","needs":"ニーズ","longTermGoal":"長期目標","shortTermGoal":"短期目標","serviceContent":"サービス"}]`;
 }
 
 // ========================================
