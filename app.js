@@ -405,11 +405,56 @@ async function callGeminiAPI(prompt) {
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const errorMessage = errorData?.error?.message || `HTTPエラー ${response.status}`;
-        throw new Error(`API呼び出しに失敗: ${errorMessage}`);
+        throw new Error(translateApiError(errorMessage));
     }
 
     const result = await response.json();
     return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+// APIエラーを日本語に変換
+function translateApiError(errorMessage) {
+    // 無料枠制限エラー
+    if (errorMessage.includes('exceeded your current quota') ||
+        errorMessage.includes('Quota exceeded') ||
+        errorMessage.includes('rate limit')) {
+        return `⚠️ Gemini API の無料枠制限に達しました。
+
+【解決方法】
+• しばらく待ってから再試行してください（1〜2分）
+• 「✨ 提案を表示（API不要）」ボタンを使えば、APIを使わずにテンプレートから自動的にケアプランを生成できます！
+
+💡 API不要モードなら制限を気にせず使えます。`;
+    }
+
+    // APIキーエラー
+    if (errorMessage.includes('API_KEY_INVALID') ||
+        errorMessage.includes('API key not valid')) {
+        return `⚠️ APIキーが無効です。
+
+【解決方法】
+• 設定画面でAPIキーを確認してください
+• Google AI StudioでAPIキーを再発行してください
+• 「✨ 提案を表示（API不要）」ボタンなら、APIキーなしで使えます！`;
+    }
+
+    // モデルアクセスエラー
+    if (errorMessage.includes('model not found') ||
+        errorMessage.includes('permission denied')) {
+        return `⚠️ AIモデルにアクセスできません。
+
+【解決方法】
+• 「✨ 提案を表示（API不要）」ボタンをお試しください
+• APIキーなしでテンプレートから生成できます！`;
+    }
+
+    // その他のエラー
+    return `⚠️ AI生成でエラーが発生しました。
+
+${errorMessage}
+
+【代替方法】
+「✨ 提案を表示（API不要）」ボタンを使えば、APIを使わずにケアプランを生成できます！`;
 }
 
 function parseAIResponse(text) {
