@@ -16,6 +16,7 @@ let apiKey = localStorage.getItem('geminiApiKey') || '';
 // 利用者管理
 let users = JSON.parse(localStorage.getItem('careplan_users') || '[]');
 let currentUserId = null;
+let currentPlanId = null; // 現在編集中の計画書ID
 let savedCarePlans = JSON.parse(localStorage.getItem('careplan_plans') || '[]');
 
 // ========================================
@@ -149,6 +150,9 @@ function startAssessment() {
         alert('サービス種別を選択してください');
         return;
     }
+    currentPlanId = null; // 新規作成なのでリセット
+    carePlanItems = []; // 計画書アイテムもリセット
+    assessmentData = {}; // アセスメントデータもリセット
     showScreen('assessmentScreen');
 }
 
@@ -1151,13 +1155,18 @@ function showUserPlanSelectModal(user, plans) {
     const planListHtml = plans.map(plan => {
         const date = new Date(plan.updatedAt).toLocaleDateString('ja-JP');
         return `
-            <div class="card" style="cursor: pointer; margin-bottom: 12px;" onclick="loadCarePlan('${plan.id}')">
+            <div class="card" style="margin-bottom: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
+                    <div style="cursor: pointer; flex: 1;" onclick="loadCarePlan('${plan.id}')">
                         <div style="font-weight: 600;">${SERVICE_TYPES[plan.serviceType]?.name || plan.serviceType}</div>
                         <div style="font-size: 12px; color: var(--text-secondary);">${plan.items.length}項目 / ${date}</div>
                     </div>
-                    <span style="color: var(--primary-color);">→</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button class="btn btn-danger" style="padding: 6px 12px; font-size: 12px;" onclick="event.stopPropagation(); deleteCarePlan('${plan.id}')">
+                            🗑️
+                        </button>
+                        <span style="color: var(--primary-color); cursor: pointer;" onclick="loadCarePlan('${plan.id}')">→</span>
+                    </div>
                 </div>
             </div>
         `;
@@ -1204,12 +1213,38 @@ function closePlanSelectModal() {
 function loadCarePlan(planId) {
     const plan = savedCarePlans.find(p => p.id === planId);
     if (plan) {
+        currentPlanId = planId; // 編集中の計画書を設定
         selectedServiceType = plan.serviceType;
         carePlanItems = [...plan.items];
         assessmentData = plan.assessmentData || {};
         closePlanSelectModal();
         showScreen('carePlanScreen');
     }
+}
+
+function deleteCarePlan(planId) {
+    if (!confirm('この計画書を削除しますか？')) {
+        return;
+    }
+
+    savedCarePlans = savedCarePlans.filter(p => p.id !== planId);
+    localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+
+    if (currentPlanId === planId) {
+        currentPlanId = null;
+    }
+
+    // モーダルを再描画
+    closePlanSelectModal();
+
+    // 計画書が残っている場合はモーダルを再表示
+    const user = users.find(u => u.id === currentUserId);
+    const userPlans = savedCarePlans.filter(p => p.userId === currentUserId);
+    if (user && userPlans.length > 0) {
+        showUserPlanSelectModal(user, userPlans);
+    }
+
+    alert('計画書を削除しました');
 }
 
 function deleteUser(userId) {
@@ -1239,9 +1274,91 @@ function saveCarePlan() {
         return;
     }
 
-    const planId = Date.now().toString();
+    // 既存の計画書を読み込んでいる場合は選択モーダルを表示
+    if (currentPlanId) {
+        showSaveOptionsModal();
+    } else {
+        // 新規保存
+        doSaveCarePlan(false);
+    }
+}
+
+function showSaveOptionsModal() {
+    const modal = document.createElement('div');
+    modal.id = 'saveOptionsModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    `;
+
+    modal.innerHTML = `
+        <div style="
+            background: var(--bg-color);
+            border-radius: 16px;
+            max-width: 400px;
+            width: 100%;
+            padding: 24px;
+        ">
+            <h2 style="margin-bottom: 16px; color: var(--text-color);">💾 保存方法を選択</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">
+                既存の計画書を読み込んでいます。どのように保存しますか？
+            </p>
+            
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <button class="btn btn-primary btn-block" onclick="closeSaveOptionsModal(); doSaveCarePlan(true)">
+                    🔄 上書き保存
+                </button>
+                <button class="btn btn-success btn-block" onclick="closeSaveOptionsModal(); doSaveCarePlan(false)">
+                    ➕ 新規として保存
+                </button>
+                <button class="btn btn-secondary btn-block" onclick="closeSaveOptionsModal()">
+                    キャンセル
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeSaveOptionsModal();
+        }
+    });
+}
+
+function closeSaveOptionsModal() {
+    const modal = document.getElementById('saveOptionsModal');
+    if (modal) modal.remove();
+}
+
+function doSaveCarePlan(overwrite) {
     const now = new Date().toISOString();
 
+    if (overwrite && currentPlanId) {
+        // 上書き保存
+        const planIndex = savedCarePlans.findIndex(p => p.id === currentPlanId);
+        if (planIndex !== -1) {
+            savedCarePlans[planIndex].items = [...carePlanItems];
+            savedCarePlans[planIndex].assessmentData = { ...assessmentData };
+            savedCarePlans[planIndex].updatedAt = now;
+            localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+            alert('計画書を上書き保存しました');
+            return;
+        }
+    }
+
+    // 新規保存
+    const planId = Date.now().toString();
     const plan = {
         id: planId,
         userId: currentUserId,
@@ -1254,8 +1371,8 @@ function saveCarePlan() {
 
     savedCarePlans.push(plan);
     localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
-
-    alert('計画書を保存しました');
+    currentPlanId = planId; // 新規保存後はこの計画書を編集中に
+    alert('計画書を新規保存しました');
 }
 
 // showScreen関数を更新してuserListScreenに対応
