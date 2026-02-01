@@ -237,9 +237,9 @@ function renderCategoryContent() {
                 <span id="checkedCount">(${getCheckedCategoryCount()}項目)</span>
             </button>
             
-            <button class="btn btn-secondary btn-block mt-4" 
-                    onclick="openManualEntryModal()">
-                ✏️ 手動で入力する
+            <button class="btn btn-success btn-block mt-4" 
+                    onclick="showSuggestions()">
+                ✨ 提案を表示（API不要）
             </button>
             
             ${!useLocalAI && !apiKey ? `
@@ -731,4 +731,186 @@ function saveManualEntry(categoryName) {
 
     closeManualEntryModal();
     showScreen('carePlanScreen');
+}
+
+// ========================================
+// 自動提案機能（API不要）
+// ========================================
+function showSuggestions() {
+    // 現在のカテゴリのチェック項目を取得
+    saveCurrentCategoryData();
+    const category = ASSESSMENT_CATEGORIES[currentCategoryIndex];
+    const data = assessmentData[category.id] || { checkedItems: [] };
+
+    if (data.checkedItems.length === 0) {
+        alert('項目をチェックしてから「提案を表示」をクリックしてください');
+        return;
+    }
+
+    // チェック項目に対応するテンプレートを取得
+    const suggestions = [];
+    data.checkedItems.forEach(item => {
+        if (ITEM_TEMPLATES && ITEM_TEMPLATES[item]) {
+            suggestions.push({
+                itemName: item,
+                ...ITEM_TEMPLATES[item]
+            });
+        }
+    });
+
+    if (suggestions.length === 0) {
+        alert('選択した項目に対応する提案が見つかりませんでした');
+        return;
+    }
+
+    // 提案モーダルを表示
+    showSuggestionModal(category.name, suggestions);
+}
+
+function showSuggestionModal(categoryName, suggestions) {
+    const modal = document.createElement('div');
+    modal.id = 'suggestionModal';
+    modal.className = 'modal-overlay';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        overflow-y: auto;
+    `;
+
+    const suggestionsHtml = suggestions.map((suggestion, index) => `
+        <div class="suggestion-card" style="
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        " onclick="toggleSuggestionSelect(${index})" id="suggestion-${index}">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                <input type="checkbox" id="suggestionCheck-${index}" checked style="width: 20px; height: 20px;">
+                <strong style="color: var(--primary-color);">${suggestion.itemName}</strong>
+            </div>
+            <div style="font-size: 14px; line-height: 1.6;">
+                <div style="margin-bottom: 8px;">
+                    <span style="color: var(--text-secondary);">ニーズ：</span>
+                    <span>${suggestion.needs}</span>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <span style="color: var(--text-secondary);">長期目標：</span>
+                    <span>${suggestion.longTermGoal}</span>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <span style="color: var(--text-secondary);">短期目標：</span>
+                    <span>${suggestion.shortTermGoal}</span>
+                </div>
+                <div>
+                    <span style="color: var(--text-secondary);">サービス：</span>
+                    <span>${suggestion.serviceContent}</span>
+                </div>
+            </div>
+        </div>
+    `).join('');
+
+    modal.innerHTML = `
+        <div style="
+            background: var(--bg-color);
+            border-radius: 16px;
+            max-width: 600px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 24px;
+        ">
+            <h2 style="margin-bottom: 8px; color: var(--text-color);">✨ 提案内容</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">
+                ${categoryName}のチェック項目から自動生成しました。<br>
+                追加する項目を選択してください。
+            </p>
+            
+            <div id="suggestionList">
+                ${suggestionsHtml}
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-top: 20px;">
+                <button class="btn btn-secondary" style="flex: 1;" onclick="closeSuggestionModal()">
+                    キャンセル
+                </button>
+                <button class="btn btn-primary" style="flex: 1;" onclick="addSelectedSuggestions()">
+                    選択した項目を追加
+                </button>
+            </div>
+            
+            <p style="color: var(--text-secondary); font-size: 12px; text-align: center; margin-top: 16px;">
+                💡 追加後に第2表で編集できます
+            </p>
+        </div>
+    `;
+
+    // グローバルに提案データを保存
+    window.currentSuggestions = suggestions;
+
+    document.body.appendChild(modal);
+
+    // モーダル外クリックで閉じる
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeSuggestionModal();
+        }
+    });
+}
+
+function toggleSuggestionSelect(index) {
+    const checkbox = document.getElementById(`suggestionCheck-${index}`);
+    const card = document.getElementById(`suggestion-${index}`);
+
+    if (checkbox && card) {
+        checkbox.checked = !checkbox.checked;
+        card.style.borderColor = checkbox.checked ? 'var(--primary-color)' : 'transparent';
+        card.style.opacity = checkbox.checked ? '1' : '0.6';
+    }
+}
+
+function closeSuggestionModal() {
+    const modal = document.getElementById('suggestionModal');
+    if (modal) {
+        modal.remove();
+    }
+    window.currentSuggestions = null;
+}
+
+function addSelectedSuggestions() {
+    const suggestions = window.currentSuggestions || [];
+    let addedCount = 0;
+
+    suggestions.forEach((suggestion, index) => {
+        const checkbox = document.getElementById(`suggestionCheck-${index}`);
+        if (checkbox && checkbox.checked) {
+            carePlanItems.push({
+                categoryName: suggestion.itemName,
+                needs: suggestion.needs,
+                longTermGoal: suggestion.longTermGoal,
+                shortTermGoal: suggestion.shortTermGoal,
+                serviceContent: suggestion.serviceContent
+            });
+            addedCount++;
+        }
+    });
+
+    closeSuggestionModal();
+
+    if (addedCount > 0) {
+        showScreen('carePlanScreen');
+    } else {
+        alert('項目を選択してください');
+    }
 }
