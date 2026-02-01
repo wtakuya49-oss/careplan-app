@@ -54,6 +54,10 @@
             </div>
 
             <div class="card">
+                <button class="btn btn-primary btn-block" onclick="showScreen('userListScreen')"
+                    style="margin-bottom: 12px;">
+                    👥 利用者一覧
+                </button>
                 <button class="btn btn-secondary btn-block" onclick="openSettings()">
                     ⚙️ 設定
                 </button>
@@ -95,6 +99,23 @@
 
             <div id="carePlanContent">
                 <!-- 計画書がここに生成される -->
+            </div>
+        </div>
+        <!-- 利用者一覧画面 -->
+        <div id="userListScreen" class="screen">
+            <div class="screen-header">
+                <button class="back-btn" onclick="showScreen('homeScreen')">←</button>
+                <h1 class="screen-title">利用者一覧</h1>
+            </div>
+
+            <div class="card">
+                <button class="btn btn-success btn-block" onclick="openUserAddModal()">
+                    ➕ 新規利用者を登録
+                </button>
+            </div>
+
+            <div id="userListContent">
+                <!-- 利用者一覧がここに生成される -->
             </div>
         </div>
 

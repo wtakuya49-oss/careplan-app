@@ -13,6 +13,11 @@ let useLocalAI = false;
 let aiSession = null;
 let apiKey = localStorage.getItem('geminiApiKey') || '';
 
+// 利用者管理
+let users = JSON.parse(localStorage.getItem('careplan_users') || '[]');
+let currentUserId = null;
+let savedCarePlans = JSON.parse(localStorage.getItem('careplan_plans') || '[]');
+
 // ========================================
 // 初期化
 // ========================================
@@ -554,6 +559,7 @@ function renderCarePlan() {
         
         <div class="card">
             <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-success" onclick="saveCarePlan()">💾 保存</button>
                 <button class="btn btn-secondary" onclick="copyToClipboard()">📋 コピー</button>
                 <button class="btn btn-secondary" onclick="exportToCSV()">📄 CSV出力</button>
                 <button class="btn btn-primary" onclick="showScreen('assessmentScreen')">➕ 追加</button>
@@ -914,3 +920,305 @@ function addSelectedSuggestions() {
         alert('項目を選択してください');
     }
 }
+
+// ========================================
+// 利用者管理機能
+// ========================================
+function renderUserList() {
+    const container = document.getElementById('userListContent');
+    if (!container) return;
+
+    if (users.length === 0) {
+        container.innerHTML = `
+            <div class="card text-center">
+                <p style="color: var(--text-secondary);">登録されている利用者はいません</p>
+                <p style="font-size: 14px; color: var(--text-secondary);">「新規利用者を登録」から追加してください</p>
+            </div>
+        `;
+        return;
+    }
+
+    const html = users.map(user => {
+        const planCount = savedCarePlans.filter(p => p.userId === user.id).length;
+        return `
+            <div class="card user-card" style="cursor: pointer;" onclick="selectUser('${user.id}')">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 20px; font-weight: 600; color: var(--primary-color);">
+                            ${user.initial}
+                        </div>
+                        <div style="font-size: 14px; color: var(--text-secondary); margin-top: 4px;">
+                            ${user.age}歳 / ${user.careLevel}
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 12px; color: var(--text-secondary);">
+                            計画書: ${planCount}件
+                        </div>
+                        <button class="btn btn-small btn-danger" onclick="event.stopPropagation(); deleteUser('${user.id}')" style="margin-top: 8px; padding: 4px 12px; font-size: 12px;">
+                            削除
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = html;
+}
+
+function openUserAddModal() {
+    const modal = document.createElement('div');
+    modal.id = 'userAddModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    `;
+
+    modal.innerHTML = `
+        <div style="
+            background: var(--bg-color);
+            border-radius: 16px;
+            max-width: 400px;
+            width: 100%;
+            padding: 24px;
+        ">
+            <h2 style="margin-bottom: 20px; color: var(--text-color);">👤 新規利用者登録</h2>
+            
+            <div class="form-group">
+                <label class="form-label">イニシャル（例: Y.T）</label>
+                <input type="text" class="form-input" id="userInitial" placeholder="Y.T" maxlength="10">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">年齢</label>
+                <input type="number" class="form-input" id="userAge" placeholder="85" min="0" max="120">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">要介護度</label>
+                <select class="form-input" id="userCareLevel">
+                    <option value="要支援1">要支援1</option>
+                    <option value="要支援2">要支援2</option>
+                    <option value="要介護1">要介護1</option>
+                    <option value="要介護2">要介護2</option>
+                    <option value="要介護3" selected>要介護3</option>
+                    <option value="要介護4">要介護4</option>
+                    <option value="要介護5">要介護5</option>
+                </select>
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-top: 20px;">
+                <button class="btn btn-secondary" style="flex: 1;" onclick="closeUserAddModal()">キャンセル</button>
+                <button class="btn btn-primary" style="flex: 1;" onclick="saveNewUser()">登録</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeUserAddModal();
+        }
+    });
+}
+
+function closeUserAddModal() {
+    const modal = document.getElementById('userAddModal');
+    if (modal) modal.remove();
+}
+
+function saveNewUser() {
+    const initial = document.getElementById('userInitial').value.trim();
+    const age = parseInt(document.getElementById('userAge').value) || 0;
+    const careLevel = document.getElementById('userCareLevel').value;
+
+    if (!initial) {
+        alert('イニシャルを入力してください');
+        return;
+    }
+
+    if (age < 0 || age > 120) {
+        alert('年齢を正しく入力してください');
+        return;
+    }
+
+    const newUser = {
+        id: Date.now().toString(),
+        initial,
+        age,
+        careLevel,
+        createdAt: new Date().toISOString()
+    };
+
+    users.push(newUser);
+    localStorage.setItem('careplan_users', JSON.stringify(users));
+
+    closeUserAddModal();
+    renderUserList();
+}
+
+function selectUser(userId) {
+    currentUserId = userId;
+    const user = users.find(u => u.id === userId);
+
+    if (user) {
+        // 利用者の保存済み計画書があるか確認
+        const userPlans = savedCarePlans.filter(p => p.userId === userId);
+
+        if (userPlans.length > 0) {
+            // 計画書がある場合は選択モーダルを表示
+            showUserPlanSelectModal(user, userPlans);
+        } else {
+            // 計画書がない場合は新規作成へ
+            showScreen('homeScreen');
+        }
+    }
+}
+
+function showUserPlanSelectModal(user, plans) {
+    const modal = document.createElement('div');
+    modal.id = 'planSelectModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    `;
+
+    const planListHtml = plans.map(plan => {
+        const date = new Date(plan.updatedAt).toLocaleDateString('ja-JP');
+        return `
+            <div class="card" style="cursor: pointer; margin-bottom: 12px;" onclick="loadCarePlan('${plan.id}')">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600;">${SERVICE_TYPES[plan.serviceType]?.name || plan.serviceType}</div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">${plan.items.length}項目 / ${date}</div>
+                    </div>
+                    <span style="color: var(--primary-color);">→</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    modal.innerHTML = `
+        <div style="
+            background: var(--bg-color);
+            border-radius: 16px;
+            max-width: 400px;
+            width: 100%;
+            padding: 24px;
+            max-height: 80vh;
+            overflow-y: auto;
+        ">
+            <h2 style="margin-bottom: 8px; color: var(--text-color);">${user.initial}さんの計画書</h2>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">
+                読み込む計画書を選択するか、新規作成してください
+            </p>
+            
+            ${planListHtml}
+            
+            <div style="display: flex; gap: 12px; margin-top: 20px;">
+                <button class="btn btn-secondary" style="flex: 1;" onclick="closePlanSelectModal()">キャンセル</button>
+                <button class="btn btn-primary" style="flex: 1;" onclick="closePlanSelectModal(); showScreen('homeScreen')">新規作成</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closePlanSelectModal();
+        }
+    });
+}
+
+function closePlanSelectModal() {
+    const modal = document.getElementById('planSelectModal');
+    if (modal) modal.remove();
+}
+
+function loadCarePlan(planId) {
+    const plan = savedCarePlans.find(p => p.id === planId);
+    if (plan) {
+        selectedServiceType = plan.serviceType;
+        carePlanItems = [...plan.items];
+        assessmentData = plan.assessmentData || {};
+        closePlanSelectModal();
+        showScreen('carePlanScreen');
+    }
+}
+
+function deleteUser(userId) {
+    if (!confirm('この利用者を削除しますか？関連する計画書も削除されます。')) {
+        return;
+    }
+
+    users = users.filter(u => u.id !== userId);
+    savedCarePlans = savedCarePlans.filter(p => p.userId !== userId);
+
+    localStorage.setItem('careplan_users', JSON.stringify(users));
+    localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+
+    if (currentUserId === userId) {
+        currentUserId = null;
+    }
+
+    renderUserList();
+}
+
+// ========================================
+// 計画書保存機能
+// ========================================
+function saveCarePlan() {
+    if (carePlanItems.length === 0) {
+        alert('保存する項目がありません');
+        return;
+    }
+
+    const planId = Date.now().toString();
+    const now = new Date().toISOString();
+
+    const plan = {
+        id: planId,
+        userId: currentUserId,
+        serviceType: selectedServiceType,
+        items: [...carePlanItems],
+        assessmentData: { ...assessmentData },
+        createdAt: now,
+        updatedAt: now
+    };
+
+    savedCarePlans.push(plan);
+    localStorage.setItem('careplan_plans', JSON.stringify(savedCarePlans));
+
+    alert('計画書を保存しました');
+}
+
+// showScreen関数を更新してuserListScreenに対応
+const originalShowScreen = showScreen;
+showScreen = function (screenId) {
+    originalShowScreen(screenId);
+
+    if (screenId === 'userListScreen') {
+        renderUserList();
+    }
+};
